@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Momentum Trader</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <meta http-equiv="refresh" content="60">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+    }
+
+    header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    header h1 { font-size: 18px; font-weight: 600; color: #58a6ff; }
+    header span { color: #8b949e; font-size: 12px; }
+
+    .refresh-btn {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .refresh-btn:hover { background: #30363d; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      padding: 24px 32px 0;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 20px;
+    }
+
+    .card .label { color: #8b949e; font-size: 12px; margin-bottom: 6px; }
+    .card .value { font-size: 24px; font-weight: 700; }
+    .card .value.green { color: #3fb950; }
+    .card .value.red   { color: #f85149; }
+    .card .value.blue  { color: #58a6ff; }
+
+    .section {
+      margin: 24px 32px;
+    }
+
+    .section h2 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    th {
+      background: #21262d;
+      padding: 10px 16px;
+      text-align: left;
+      font-size: 12px;
+      color: #8b949e;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    td {
+      padding: 12px 16px;
+      border-top: 1px solid #21262d;
+    }
+
+    tr:hover td { background: #1c2128; }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .badge.buy  { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
+    .badge.sell { background: #2d0c0c; color: #f85149; border: 1px solid #b91c1c; }
+    .badge.hold { background: #1c2128; color: #8b949e; border: 1px solid #30363d; }
+
+    .positive { color: #3fb950; }
+    .negative { color: #f85149; }
+
+    .signals-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .signal-box {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 20px;
+    }
+
+    .signal-box h3 {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .signal-box.buys  h3 { color: #3fb950; }
+    .signal-box.sells h3 { color: #f85149; }
+
+    .ticker-pill {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      margin: 4px;
+    }
+
+    .ticker-pill.buy  { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
+    .ticker-pill.sell { background: #2d0c0c; color: #f85149; border: 1px solid #b91c1c; }
+
+    .empty { color: #8b949e; font-style: italic; font-size: 13px; }
+
+    .chart-container {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 20px;
+      height: 260px;
+    }
+
+    footer {
+      text-align: center;
+      color: #30363d;
+      font-size: 12px;
+      padding: 32px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Momentum Trader</h1>
+  <span>Paper Trading · Updated {{ updated }} · Auto-refreshing in <span id="countdown">60</span>s</span>
+  <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
+</header>
+
+<!-- Summary Cards -->
+<div class="grid">
+  <div class="card">
+    <div class="label">Portfolio Equity</div>
+    <div class="value blue">${{ "{:,.2f}".format(account.equity) }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Cash Available</div>
+    <div class="value">${{ "{:,.2f}".format(account.cash) }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Day P&L</div>
+    <div class="value {{ 'green' if account.pnl >= 0 else 'red' }}">
+      {{ "+" if account.pnl >= 0 else "" }}${{ "{:,.2f}".format(account.pnl) }}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Open Positions</div>
+    <div class="value">{{ positions|length }} / {{ max_positions }}</div>
+  </div>
+</div>
+
+<!-- Signals -->
+<div class="section">
+  <h2>Today's Signals</h2>
+  <div class="signals-row">
+    <div class="signal-box buys">
+      <h3>▲ Buy Signals</h3>
+      {% if signals.buy %}
+        {% for t in signals.buy %}
+          <span class="ticker-pill buy">{{ t }}</span>
+        {% endfor %}
+      {% else %}
+        <span class="empty">No buy signals today</span>
+      {% endif %}
+    </div>
+    <div class="signal-box sells">
+      <h3>▼ Sell Signals</h3>
+      {% if signals.sell %}
+        {% for t in signals.sell %}
+          <span class="ticker-pill sell">{{ t }}</span>
+        {% endfor %}
+      {% else %}
+        <span class="empty">No sell signals today</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Open Positions -->
+<div class="section">
+  <h2>Open Positions</h2>
+  {% if positions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th>Shares</th>
+        <th>Entry Price</th>
+        <th>Current Price</th>
+        <th>Unrealized P&L</th>
+        <th>Return</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in positions %}
+      <tr>
+        <td><strong>{{ p.ticker }}</strong></td>
+        <td>{{ p.shares|int }}</td>
+        <td>${{ "{:,.2f}".format(p.entry_price) }}</td>
+        <td>${{ "{:,.2f}".format(p.current_price) }}</td>
+        <td class="{{ 'positive' if p.pnl >= 0 else 'negative' }}">
+          {{ "+" if p.pnl >= 0 else "" }}${{ "{:,.2f}".format(p.pnl) }}
+        </td>
+        <td class="{{ 'positive' if p.pnl_pct >= 0 else 'negative' }}">
+          {{ "+" if p.pnl_pct >= 0 else "" }}{{ "{:.2f}".format(p.pnl_pct) }}%
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="card"><span class="empty">No open positions</span></div>
+  {% endif %}
+</div>
+
+<!-- Watchlist -->
+<div class="section">
+  <h2>Watchlist</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th>Price</th>
+        <th>RSI (14)</th>
+        <th>vs 50-SMA</th>
+        <th>Signal</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in watchlist %}
+      <tr>
+        <td><strong>{{ row.ticker }}</strong></td>
+        <td>${{ "{:,.2f}".format(row.price) }}</td>
+        <td class="{{ 'positive' if row.rsi < 50 else ('negative' if row.rsi > 70 else '') }}">
+          {{ "{:.1f}".format(row.rsi) }}
+        </td>
+        <td class="{{ 'positive' if row.vs_sma > 0 else 'negative' }}">
+          {{ "+" if row.vs_sma > 0 else "" }}{{ "{:.1f}".format(row.vs_sma) }}%
+        </td>
+        <td>
+          {% if row.ticker in signals.buy %}
+            <span class="badge buy">BUY</span>
+          {% elif row.ticker in signals.sell %}
+            <span class="badge sell">SELL</span>
+          {% else %}
+            <span class="badge hold">HOLD</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Trade History -->
+<div class="section">
+  <h2>Trade History</h2>
+  {% if trades %}
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Ticker</th>
+        <th>Shares</th>
+        <th>Entry Price</th>
+        <th>Entry Date</th>
+        <th>Exit Price</th>
+        <th>Exit Date</th>
+        <th>P&L</th>
+        <th>Return</th>
+        <th>Status</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in trades %}
+      <tr>
+        <td>{{ t.id }}</td>
+        <td><strong>{{ t.ticker }}</strong></td>
+        <td>{{ t.shares }}</td>
+        <td>${{ "{:,.2f}".format(t.entry_price) }}</td>
+        <td>{{ t.entry_date }}</td>
+        <td>{{ "${:,.2f}".format(t.exit_price) if t.exit_price else "—" }}</td>
+        <td>{{ t.exit_date if t.exit_date else "—" }}</td>
+        <td class="{{ 'positive' if t.pnl and t.pnl >= 0 else 'negative' if t.pnl else '' }}">
+          {% if t.pnl is not none %}
+            {{ "+" if t.pnl >= 0 else "" }}${{ "{:,.2f}".format(t.pnl) }}
+          {% else %}—{% endif %}
+        </td>
+        <td class="{{ 'positive' if t.pnl_pct and t.pnl_pct >= 0 else 'negative' if t.pnl_pct else '' }}">
+          {% if t.pnl_pct is not none %}
+            {{ "+" if t.pnl_pct >= 0 else "" }}{{ "{:.2f}".format(t.pnl_pct) }}%
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if t.status == "open" %}
+            <span class="badge buy">OPEN</span>
+          {% else %}
+            <span class="badge hold">CLOSED</span>
+          {% endif %}
+        </td>
+        <td style="color: #8b949e;">{{ t.reason if t.reason else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="card"><span class="empty">No trades yet — first run at 9:35 AM ET on the next market day</span></div>
+  {% endif %}
+</div>
+
+<footer>Momentum Trader · Paper Trading Only · Not financial advice</footer>
+
+<script>
+  let seconds = 60;
+  const el = document.getElementById("countdown");
+  setInterval(() => {
+    seconds--;
+    if (el) el.textContent = seconds;
+  }, 1000);
+</script>
+
+</body>
+</html>
