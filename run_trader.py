@@ -1,12 +1,47 @@
 import schedule
 import time
-from datetime import datetime
-
-from signals.scanner import scan
-from broker.alpaca import get_account, get_positions, place_buy, place_sell
-from logs.logger import log_buy, log_sell
-from config import CAPITAL, MAX_POSITIONS
+from datetime import datetime, timezone
+import zoneinfo
 import yfinance as yf
+
+from signals.scanner import scan, fetch
+from signals.indicators import add_indicators
+from broker.alpaca import get_account, get_positions, place_buy, place_sell
+from logs.logger import log_buy, log_sell, log_equity, update_trailing_stop, get_stop_price
+from config import (
+    CAPITAL, MAX_POSITIONS,
+    STOP_LOSS_PCT, TRAILING_STOP_PCT,
+    RISK_PER_TRADE, MAX_POSITION_PCT,
+    ATR_PERIOD, EMA_PERIOD, SMA_PERIOD, RSI_PERIOD,
+    MACD_FAST, MACD_SLOW, MACD_SIGNAL,
+)
+
+ET = zoneinfo.ZoneInfo("America/New_York")
+
+
+def is_market_open() -> bool:
+    now = datetime.now(ET)
+    if now.weekday() >= 5:
+        return False
+    market_open  = now.replace(hour=9,  minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0,  second=0, microsecond=0)
+    return market_open <= now <= market_close
+
+
+def calc_shares(account_equity: float, price: float, atr_value: float) -> int:
+    """ATR-based position sizing: risk RISK_PER_TRADE% of equity per ATR move."""
+    dollar_risk   = account_equity * RISK_PER_TRADE
+    shares_by_atr = int(dollar_risk / atr_value) if atr_value > 0 else 0
+    max_shares    = int((account_equity * MAX_POSITION_PCT) // price)
+    return max(1, min(shares_by_atr, max_shares))
+
+
+def get_atr(ticker: str) -> float:
+    df = fetch(ticker)
+    if df.empty or len(df) < ATR_PERIOD + 5:
+        return 0.0
+    df = add_indicators(df, atr_period=ATR_PERIOD)
+    return float(df["atr"].iloc[-1]) if "atr" in df.columns else 0.0
 
 
 def get_price(ticker: str) -> float:
@@ -17,51 +52,97 @@ def get_price(ticker: str) -> float:
     return float(df["Close"].iloc[-1])
 
 
+def check_stops(positions: list[dict]) -> list[str]:
+    """
+    Check every open position against hard stop and trailing stop.
+    Returns list of tickers that need to be sold.
+    """
+    to_sell = []
+    for p in positions:
+        ticker  = p["ticker"]
+        price   = p["current_price"]
+        entry   = p["entry_price"]
+
+        # Update trailing stop upward if price moved up
+        new_trail = update_trailing_stop(ticker, price, TRAILING_STOP_PCT)
+
+        # Hard stop (original entry-based)
+        hard_stop = entry * (1 - STOP_LOSS_PCT)
+
+        # Effective stop is the higher of hard stop and trailing stop
+        effective_stop = max(hard_stop, new_trail or hard_stop)
+
+        if price <= effective_stop:
+            reason = "trailing_stop" if (new_trail and new_trail > hard_stop) else "hard_stop"
+            print(f"  STOP HIT: {ticker} price=${price:.2f} stop=${effective_stop:.2f} ({reason})")
+            to_sell.append((ticker, reason))
+
+    return to_sell
+
+
 def run_once():
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    print(f"\n{'='*45}")
+    now = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
+    print(f"\n{'='*50}")
     print(f"  TRADER RUNNING — {now}")
-    print(f"{'='*45}")
+    print(f"{'='*50}")
+
+    if not is_market_open():
+        print("  Market is closed — skipping execution.")
+        return
 
     account   = get_account()
     positions = get_positions()
     signals   = scan()
 
-    print(f"\n  Account equity:  ${account['equity']:,.2f}")
-    print(f"  Cash available:  ${account['cash']:,.2f}")
-    print(f"  Day PnL:         ${account['pnl']:,.2f}")
-    print(f"  Open positions:  {len(positions)}/{MAX_POSITIONS}")
+    # Log equity snapshot
+    log_equity(account["equity"])
+
+    print(f"\n  Equity:         ${account['equity']:,.2f}")
+    print(f"  Cash:           ${account['cash']:,.2f}")
+    print(f"  Day P&L:        ${account['pnl']:+,.2f}")
+    print(f"  Open positions: {len(positions)}/{MAX_POSITIONS}")
 
     if positions:
-        print("\n  CURRENT POSITIONS:")
+        print("\n  OPEN POSITIONS:")
         for p in positions:
-            print(f"    {p['ticker']:<6} {p['shares']:.0f} shares  "
+            stop = get_stop_price(p["ticker"])
+            stop_str = f"  stop=${stop:.2f}" if stop else ""
+            print(f"    {p['ticker']:<6} {p['shares']:.0f} sh  "
                   f"entry=${p['entry_price']:.2f}  "
                   f"now=${p['current_price']:.2f}  "
-                  f"PnL=${p['pnl']:.2f} ({p['pnl_pct']:.1f}%)")
+                  f"PnL=${p['pnl']:+.2f} ({p['pnl_pct']:.1f}%){stop_str}")
 
-    # --- Execute sells ---
+    # --- Stop loss checks ---
+    stops_hit = check_stops(positions)
+    for ticker, reason in stops_hit:
+        p = next((x for x in positions if x["ticker"] == ticker), None)
+        if p:
+            place_sell(ticker)
+            log_sell(ticker, p["current_price"], reason)
+
+    # --- Sell signals ---
+    positions = get_positions()
     held = {p["ticker"]: p for p in positions}
-    if signals["sell"]:
-        print(f"\n  SELL SIGNALS: {signals['sell']}")
-        for ticker in signals["sell"]:
-            if ticker in held:
-                exit_price = held[ticker]["current_price"]
-                place_sell(ticker)
-                log_sell(ticker, exit_price, reason="rsi_exit")
-    else:
-        print("\n  No sell signals today.")
+    sell_tickers = [t for t in signals["sell"] if t in held and t not in [x[0] for x in stops_hit]]
 
-    # --- Execute buys ---
-    positions   = get_positions()   # refresh after sells
-    open_count  = len(positions)
-    held        = {p["ticker"] for p in positions}
-    slots       = MAX_POSITIONS - open_count
+    if sell_tickers:
+        print(f"\n  SELL SIGNALS: {sell_tickers}")
+        for ticker in sell_tickers:
+            p = held[ticker]
+            place_sell(ticker)
+            log_sell(ticker, p["current_price"], reason="signal")
+    else:
+        print("\n  No sell signals.")
+
+    # --- Buy signals ---
+    positions  = get_positions()
+    open_count = len(positions)
+    held       = {p["ticker"] for p in positions}
+    slots      = MAX_POSITIONS - open_count
 
     if signals["buy"] and slots > 0:
         print(f"\n  BUY SIGNALS: {signals['buy']}")
-        account       = get_account()
-        position_size = account["cash"] / (slots + open_count) if account["cash"] > 0 else 0
+        equity = account["equity"]
 
         for ticker in signals["buy"]:
             if slots <= 0:
@@ -69,40 +150,38 @@ def run_once():
             if ticker in held:
                 continue
 
-            price  = get_price(ticker)
+            price = get_price(ticker)
             if price <= 0:
                 continue
 
-            shares = int(position_size // price)
-            if shares < 1:
-                print(f"  SKIP {ticker} — not enough cash for 1 share (${price:.2f})")
+            atr_val = get_atr(ticker)
+            if atr_val <= 0:
+                shares = int((equity * MAX_POSITION_PCT) // price)
+            else:
+                shares = calc_shares(equity, price, atr_val)
+
+            if shares < 1 or shares * price > account["cash"]:
+                print(f"  SKIP {ticker} — insufficient cash (${price:.2f}/sh)")
                 continue
 
+            hard_stop = round(price * (1 - STOP_LOSS_PCT), 2)
             place_buy(ticker, shares)
-            log_buy(ticker, shares, price)
+            log_buy(ticker, shares, price, hard_stop)
             slots -= 1
     else:
-        print("\n  No buy signals today (or no open slots).")
+        print("\n  No buy signals (or no open slots).")
 
-    print(f"\n  Done. Next run at market open tomorrow.")
-
-
-def job():
-    run_once()
+    print(f"\n  Done. Next scheduled run: tomorrow 09:35 ET.")
 
 
 if __name__ == "__main__":
-    print("Momentum Trader starting...")
-    print("Running immediately, then scheduling for 09:35 ET daily.\n")
+    print("Momentum Trader v2 starting...")
+    print("Runs at 09:35 ET Mon–Fri. Running once now.\n")
 
     run_once()
 
-    # Runs every weekday at 09:35 ET (adjust if your timezone differs)
-    schedule.every().monday.at("09:35").do(job)
-    schedule.every().tuesday.at("09:35").do(job)
-    schedule.every().wednesday.at("09:35").do(job)
-    schedule.every().thursday.at("09:35").do(job)
-    schedule.every().friday.at("09:35").do(job)
+    for day in ["monday", "tuesday", "wednesday", "thursday", "friday"]:
+        getattr(schedule.every(), day).at("09:35").do(run_once)
 
     while True:
         schedule.run_pending()
