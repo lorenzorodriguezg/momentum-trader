@@ -25,7 +25,16 @@ ATR_PERIOD    = 14
 # --- Signal thresholds ---
 RSI_ENTRY_LOW  = 45   # RSI must have dipped here recently (pullback)
 RSI_EXIT       = 72   # Take profit when overbought
-MACD_LOOKBACK  = 3    # MACD bullish crossover must have happened within N days
+MACD_LOOKBACK  = 5    # MACD bullish crossover must have happened within N days
+
+# --- Sector filter ---
+SECTOR_EMA_PERIOD = 20   # QQQ must be above this EMA (faster than SMA50)
+
+# --- Bounce recovery (post-correction entries) ---
+BOUNCE_RSI_FLOOR  = 30   # RSI must have crashed this low recently
+BOUNCE_RSI_RECOV  = 35   # RSI must recover above this
+BOUNCE_MIN_GAIN   = 0.06 # 2-day price gain must exceed this to confirm bounce
+BOUNCE_SIZE_MULT  = 0.5  # Use half position size on bounce entries
 
 # --- Risk management ---
 STOP_LOSS_PCT     = 0.07   # Hard stop: 7% below entry

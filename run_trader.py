@@ -14,6 +14,7 @@ from config import (
     RISK_PER_TRADE, MAX_POSITION_PCT,
     ATR_PERIOD, EMA_PERIOD, SMA_PERIOD, RSI_PERIOD,
     MACD_FAST, MACD_SLOW, MACD_SIGNAL,
+    BOUNCE_SIZE_MULT,
 )
 
 ET = zoneinfo.ZoneInfo("America/New_York")
@@ -140,11 +141,18 @@ def run_once():
     held       = {p["ticker"] for p in positions}
     slots      = MAX_POSITIONS - open_count
 
-    if signals["buy"] and slots > 0:
-        print(f"\n  BUY SIGNALS: {signals['buy']}")
+    all_buys    = signals.get("buy", [])
+    all_bounces = signals.get("bounce", [])
+    any_signal  = all_buys or all_bounces
+
+    if any_signal and slots > 0:
+        if all_buys:
+            print(f"\n  BUY SIGNALS:    {all_buys}")
+        if all_bounces:
+            print(f"  BOUNCE SIGNALS: {all_bounces} (half-size, sector recovering)")
         equity = account["equity"]
 
-        for ticker in signals["buy"]:
+        for ticker, is_bounce in [(t, False) for t in all_buys] + [(t, True) for t in all_bounces]:
             if slots <= 0:
                 break
             if ticker in held:
@@ -159,6 +167,10 @@ def run_once():
                 shares = int((equity * MAX_POSITION_PCT) // price)
             else:
                 shares = calc_shares(equity, price, atr_val)
+
+            # Bounce entries get half the normal position size
+            if is_bounce:
+                shares = max(1, int(shares * BOUNCE_SIZE_MULT))
 
             if shares < 1 or shares * price > account["cash"]:
                 print(f"  SKIP {ticker} — insufficient cash (${price:.2f}/sh)")
