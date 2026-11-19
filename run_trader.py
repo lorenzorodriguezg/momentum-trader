@@ -14,7 +14,7 @@ from config import (
     RISK_PER_TRADE, MAX_POSITION_PCT,
     ATR_PERIOD, EMA_PERIOD, SMA_PERIOD, RSI_PERIOD,
     MACD_FAST, MACD_SLOW, MACD_SIGNAL,
-    BOUNCE_SIZE_MULT,
+    BOUNCE_SIZE_MULT, TRAILING_STOP_PCT_TIGHT,
 )
 
 ET = zoneinfo.ZoneInfo("America/New_York")
@@ -53,24 +53,21 @@ def get_price(ticker: str) -> float:
     return float(df["Close"].iloc[-1])
 
 
-def check_stops(positions: list[dict]) -> list[str]:
+def check_stops(positions: list[dict], tight: bool = False) -> list[str]:
     """
     Check every open position against hard stop and trailing stop.
-    Returns list of tickers that need to be sold.
+    tight=True uses TRAILING_STOP_PCT_TIGHT (deep correction mode).
+    Returns list of (ticker, reason) that need to be sold.
     """
+    trail_pct = TRAILING_STOP_PCT_TIGHT if tight else TRAILING_STOP_PCT
     to_sell = []
     for p in positions:
         ticker  = p["ticker"]
         price   = p["current_price"]
         entry   = p["entry_price"]
 
-        # Update trailing stop upward if price moved up
-        new_trail = update_trailing_stop(ticker, price, TRAILING_STOP_PCT)
-
-        # Hard stop (original entry-based)
+        new_trail = update_trailing_stop(ticker, price, trail_pct)
         hard_stop = entry * (1 - STOP_LOSS_PCT)
-
-        # Effective stop is the higher of hard stop and trailing stop
         effective_stop = max(hard_stop, new_trail or hard_stop)
 
         if price <= effective_stop:
@@ -93,7 +90,10 @@ def run_once():
 
     account   = get_account()
     positions = get_positions()
-    signals   = scan()
+    signals         = scan()
+    deep_correction = signals.get("sector") == "deep_correction"
+    if deep_correction:
+        print("  [!] DEEP CORRECTION MODE — no new entries, tight stops active")
 
     # Log equity snapshot
     log_equity(account["equity"])
@@ -114,7 +114,7 @@ def run_once():
                   f"PnL=${p['pnl']:+.2f} ({p['pnl_pct']:.1f}%){stop_str}")
 
     # --- Stop loss checks ---
-    stops_hit = check_stops(positions)
+    stops_hit = check_stops(positions, tight=deep_correction)
     for ticker, reason in stops_hit:
         p = next((x for x in positions if x["ticker"] == ticker), None)
         if p:

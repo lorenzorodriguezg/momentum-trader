@@ -32,9 +32,13 @@ SECTOR_EMA_PERIOD = 20   # QQQ must be above this EMA (faster than SMA50)
 
 # --- Bounce recovery (post-correction entries) ---
 BOUNCE_RSI_FLOOR  = 30   # RSI must have crashed this low recently
-BOUNCE_RSI_RECOV  = 35   # RSI must recover above this
-BOUNCE_MIN_GAIN   = 0.06 # 2-day price gain must exceed this to confirm bounce
-BOUNCE_SIZE_MULT  = 0.5  # Use half position size on bounce entries
+BOUNCE_RSI_RECOV  = 38   # RSI must recover above this (raised: need more confirmation)
+BOUNCE_MIN_GAIN   = 0.07 # 2-day price gain must exceed this (raised: avoid falling knives)
+BOUNCE_SIZE_MULT  = 0.35 # Use 35% position size on bounce entries (reduced: more cautious)
+
+# --- Deep correction mode (blocks ALL new entries) ---
+DEEP_CORRECTION_RSI_THRESHOLD = 38    # When QQQ RSI < this → no new entries at all
+TRAILING_STOP_PCT_TIGHT       = 0.035 # Tighter trailing stop during deep correction
 
 # --- Risk management ---
 STOP_LOSS_PCT     = 0.07   # Hard stop: 7% below entry
